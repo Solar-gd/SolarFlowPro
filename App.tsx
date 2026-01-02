@@ -1,10 +1,12 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Project, ProjectStatus, User, UserRole } from './types';
 import Dashboard from './components/Dashboard';
 import ProjectList from './components/ProjectList';
 import ProjectDetails from './components/ProjectDetails';
 import Login from './components/Login';
+import EquipmentList from './components/EquipmentList';
+import { getCurrentUser, signOut } from './services/authService';
+import { supabase } from './services/supabaseClient';
 
 const MOCK_PROJECTS: Project[] = [
   {
@@ -41,9 +43,45 @@ const MOCK_PROJECTS: Project[] = [
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [view, setView] = useState<'dashboard' | 'projects'>('dashboard');
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState<'dashboard' | 'projects' | 'equipment'>('dashboard');
   const [projects, setProjects] = useState<Project[]>(MOCK_PROJECTS);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+
+  useEffect(() => {
+    // Check active session
+    getCurrentUser().then(user => {
+      setCurrentUser(user);
+      setLoading(false);
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setCurrentUser({
+          id: session.user.id,
+          name: session.user.user_metadata.full_name || session.user.email?.split('@')[0] || 'User',
+          role: (session.user.user_metadata.role as UserRole) || UserRole.INTEGRADOR,
+          avatar: session.user.user_metadata.avatar_url || `https://i.pravatar.cc/150?u=${session.user.id}`
+        });
+      } else {
+        setCurrentUser(null);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-900">
+        <div className="text-amber-400 flex flex-col items-center gap-4">
+          <i className="fas fa-sun fa-spin text-5xl"></i>
+          <span className="font-bold tracking-widest text-xl">SolarFlowPro</span>
+        </div>
+      </div>
+    );
+  }
 
   if (!currentUser) {
     return <Login onLogin={setCurrentUser} />;
@@ -71,7 +109,8 @@ const App: React.FC = () => {
     setSelectedProject(newProject);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await signOut();
     setCurrentUser(null);
     setView('dashboard');
   };
@@ -90,18 +129,24 @@ const App: React.FC = () => {
 
           <nav className="space-y-2">
             {isEngenharia && (
-              <SidebarLink 
-                active={view === 'dashboard'} 
-                onClick={() => setView('dashboard')} 
-                icon="fa-columns" 
-                label="Dashboard" 
+              <SidebarLink
+                active={view === 'dashboard'}
+                onClick={() => setView('dashboard')}
+                icon="fa-columns"
+                label="Dashboard"
               />
             )}
-            <SidebarLink 
-              active={view === 'projects' || !isEngenharia} 
-              onClick={() => setView('projects')} 
-              icon="fa-layer-group" 
-              label="Projetos" 
+            <SidebarLink
+              active={view === 'projects' || (!isEngenharia && view === 'projects')}
+              onClick={() => setView('projects')}
+              icon="fa-layer-group"
+              label="Projetos"
+            />
+            <SidebarLink
+              active={view === 'equipment'}
+              onClick={() => setView('equipment')}
+              icon="fa-tools"
+              label="Equipamentos"
             />
             <SidebarLink icon="fa-calendar-alt" label="Minha Agenda" />
             {isEngenharia && <SidebarLink icon="fa-users" label="Clientes" />}
@@ -129,15 +174,20 @@ const App: React.FC = () => {
         <header className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-3xl font-bold text-slate-900">
-              {view === 'dashboard' && isEngenharia ? 'Overview do Sistema' : 'Gerenciamento de Projetos'}
+              {view === 'dashboard' && isEngenharia && 'Overview do Sistema'}
+              {view === 'projects' && 'Gerenciamento de Projetos'}
+              {view === 'equipment' && 'Catálogo de Equipamentos'}
+              {!isEngenharia && view === 'dashboard' && 'Meus Projetos'}
             </h1>
             <p className="text-slate-500 mt-1">
-              Olá, {currentUser.name}. {isEngenharia ? 'Existem 2 projetos aguardando sua análise.' : 'Seus projetos atribuídos estão listados abaixo.'}
+              Olá, {currentUser.name}.
+              {view === 'equipment' ? 'Gerencie o catálogo de componentes homologados.' :
+                (isEngenharia ? 'Existem 2 projetos aguardando sua análise.' : 'Seus projetos atribuídos estão listados abaixo.')}
             </p>
           </div>
-          
-          {isEngenharia && (
-            <button 
+
+          {isEngenharia && view === 'projects' && (
+            <button
               onClick={addNewProject}
               className="bg-amber-400 hover:bg-amber-500 text-slate-900 px-6 py-3 rounded-xl font-bold shadow-lg shadow-amber-400/20 transition flex items-center gap-2"
             >
@@ -147,21 +197,21 @@ const App: React.FC = () => {
           )}
         </header>
 
-        {(view === 'dashboard' && isEngenharia) ? (
-          <Dashboard projects={projects} />
-        ) : (
-          <ProjectList 
-            projects={projects} 
-            onSelectProject={setSelectedProject} 
+        {view === 'dashboard' && isEngenharia && <Dashboard projects={projects} />}
+        {(view === 'projects' || (!isEngenharia && view === 'dashboard')) && (
+          <ProjectList
+            projects={projects}
+            onSelectProject={setSelectedProject}
           />
         )}
+        {view === 'equipment' && <EquipmentList />}
 
         {selectedProject && (
-          <ProjectDetails 
-            project={selectedProject} 
+          <ProjectDetails
+            project={selectedProject}
             currentUser={currentUser}
-            onUpdate={handleUpdateProject} 
-            onClose={() => setSelectedProject(null)} 
+            onUpdate={handleUpdateProject}
+            onClose={() => setSelectedProject(null)}
           />
         )}
       </main>
@@ -170,11 +220,10 @@ const App: React.FC = () => {
 };
 
 const SidebarLink = ({ active, onClick, icon, label }: { active?: boolean; onClick?: () => void; icon: string; label: string }) => (
-  <button 
+  <button
     onClick={onClick}
-    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-      active ? 'bg-amber-400 text-slate-900 font-bold shadow-md shadow-amber-400/10' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-    }`}
+    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-amber-400 text-slate-900 font-bold shadow-md shadow-amber-400/10' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+      }`}
   >
     <i className={`fas ${icon} w-5`}></i>
     <span>{label}</span>
